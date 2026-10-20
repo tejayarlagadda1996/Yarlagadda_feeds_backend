@@ -7,15 +7,15 @@ router = APIRouter(prefix="/modules", tags=["modules"])
 FACTORY_MODULES: list[ModuleInfo] = [
     ModuleInfo(
         id="raw_materials",
-        title="Materials",
-        description="Buy & stock",
+        title="Buyings",
+        description="Buys & stock",
         status="ready",
         icon="inventory",
     ),
     ModuleInfo(
         id="payments",
-        title="Pay Vendor",
-        description="Vendor dues & pay",
+        title="Parties",
+        description="Party dues & pay",
         status="ready",
         icon="payments",
     ),
