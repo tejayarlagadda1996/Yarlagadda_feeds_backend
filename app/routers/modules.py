@@ -33,41 +33,6 @@ FACTORY_MODULES: list[ModuleInfo] = [
         status="ready",
         icon="set_meal",
     ),
-    ModuleInfo(
-        id="feed_prep",
-        title="Make Feed",
-        description="Prepare feed",
-        status="ready",
-        icon="factory",
-    ),
-    ModuleInfo(
-        id="expenses",
-        title="Spending",
-        description="Other costs",
-        status="ready",
-        icon="trending_down",
-    ),
-    ModuleInfo(
-        id="income",
-        title="Money In",
-        description="Other income",
-        status="ready",
-        icon="trending_up",
-    ),
-    ModuleInfo(
-        id="investments",
-        title="Investment",
-        description="Money put in",
-        status="ready",
-        icon="account_balance",
-    ),
-    ModuleInfo(
-        id="reports",
-        title="This Month",
-        description="Month total",
-        status="ready",
-        icon="assessment",
-    ),
 ]
 
 

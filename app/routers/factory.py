@@ -3,7 +3,7 @@ from decimal import Decimal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import extract, func
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -13,15 +13,10 @@ from app.models import (
     CatchSaleLineItem,
     CatchVehicleSale,
     Expense,
-    ExpenseCategory,
-    FeedBatch,
-    FeedBatchMaterial,
-    FeedTankDelivery,
     FishTank,
     FishType,
     Income,
     InventoryTransaction,
-    Investment,
     LabourAdvance,
     Labourer,
     LabourSalaryPayment,
@@ -38,24 +33,14 @@ from app.schemas.factory import (
     BuyerOut,
     CatchEventIn,
     CatchEventOut,
-    CategoryOut,
-    ExpenseIn,
-    ExpenseOut,
-    FeedBatchIn,
-    FeedBatchOut,
     FishTankIn,
     FishTankOut,
     FishTypeIn,
     FishTypeOut,
-    IncomeIn,
-    IncomeOut,
-    InvestmentIn,
-    InvestmentOut,
     LabourerIn,
     LabourerOut,
     MaterialTypeIn,
     MaterialTypeOut,
-    MonthReportOut,
     PaymentIn,
     PaymentOut,
     PurchaseIn,
@@ -600,130 +585,3 @@ def create_vehicle_sale(body: VehicleSaleIn, db: Session = Depends(get_db)):
     buyer = db.get(Buyer, sale.buyer_id) if sale.buyer_id else None
     out.buyer_name = buyer.name if buyer else None
     return out
-
-
-# ---------- Feed ----------
-@router.get("/feed-batches", response_model=list[FeedBatchOut])
-def list_feed_batches(db: Session = Depends(get_db)):
-    return db.query(FeedBatch).order_by(FeedBatch.batch_date.desc()).limit(100).all()
-
-
-@router.post("/feed-batches", response_model=FeedBatchOut)
-def create_feed_batch(body: FeedBatchIn, db: Session = Depends(get_db)):
-    total = Decimal("0")
-    batch = FeedBatch(batch_date=body.batch_date, notes=body.notes, total_qty_kg=Decimal("0"))
-    db.add(batch)
-    db.flush()
-    for m in body.materials:
-        qty = Decimal(str(m["quantity_used"]))
-        mid = UUID(str(m["material_type_id"]))
-        total += qty
-        db.add(FeedBatchMaterial(batch_id=batch.id, material_type_id=mid, quantity_used=qty))
-        _bump_inventory(db, mid, -qty, "feed_out", "feed_batch", batch.id)
-    for d in body.deliveries:
-        db.add(
-            FeedTankDelivery(
-                batch_id=batch.id,
-                tank_id=UUID(str(d["tank_id"])),
-                quantity_kg=Decimal(str(d["quantity_kg"])),
-                delivery_date=date.fromisoformat(str(d.get("delivery_date", body.batch_date))),
-            )
-        )
-    batch.total_qty_kg = total
-    db.commit()
-    db.refresh(batch)
-    return batch
-
-
-# ---------- Money ----------
-@router.get("/expense-categories", response_model=list[CategoryOut])
-def list_categories(db: Session = Depends(get_db)):
-    return db.query(ExpenseCategory).order_by(ExpenseCategory.name).all()
-
-
-@router.get("/expenses", response_model=list[ExpenseOut])
-def list_expenses(db: Session = Depends(get_db)):
-    rows = db.query(Expense).order_by(Expense.expense_date.desc()).limit(200).all()
-    out = []
-    for r in rows:
-        e = ExpenseOut.model_validate(r)
-        if r.category_id:
-            c = db.get(ExpenseCategory, r.category_id)
-            e.category_name = c.name if c else None
-        out.append(e)
-    return out
-
-
-@router.post("/expenses", response_model=ExpenseOut)
-def create_expense(body: ExpenseIn, db: Session = Depends(get_db)):
-    row = Expense(**body.model_dump(), source_module="manual")
-    db.add(row)
-    db.commit()
-    db.refresh(row)
-    return ExpenseOut.model_validate(row)
-
-
-@router.get("/incomes", response_model=list[IncomeOut])
-def list_incomes(db: Session = Depends(get_db)):
-    return db.query(Income).order_by(Income.income_date.desc()).limit(200).all()
-
-
-@router.post("/incomes", response_model=IncomeOut)
-def create_income(body: IncomeIn, db: Session = Depends(get_db)):
-    row = Income(**body.model_dump(), source_module="manual")
-    db.add(row)
-    db.commit()
-    db.refresh(row)
-    return row
-
-
-@router.get("/investments", response_model=list[InvestmentOut])
-def list_investments(db: Session = Depends(get_db)):
-    return db.query(Investment).order_by(Investment.investment_date.desc()).limit(200).all()
-
-
-@router.post("/investments", response_model=InvestmentOut)
-def create_investment(body: InvestmentIn, db: Session = Depends(get_db)):
-    row = Investment(**body.model_dump())
-    db.add(row)
-    db.commit()
-    db.refresh(row)
-    return row
-
-
-@router.get("/reports/month", response_model=MonthReportOut)
-def month_report(year: int, month: int, db: Session = Depends(get_db)):
-    def sum_for(model, date_col, amount_col):
-        val = (
-            db.query(func.coalesce(func.sum(amount_col), 0))
-            .filter(extract("year", date_col) == year, extract("month", date_col) == month)
-            .scalar()
-        )
-        return Decimal(str(val))
-
-    expenses = sum_for(Expense, Expense.expense_date, Expense.amount)
-    incomes = sum_for(Income, Income.income_date, Income.amount)
-    investments = sum_for(Investment, Investment.investment_date, Investment.amount)
-    material_payments = sum_for(MaterialPayment, MaterialPayment.payment_date, MaterialPayment.amount)
-    labour_paid = sum_for(LabourSalaryPayment, LabourSalaryPayment.payment_date, LabourSalaryPayment.net_paid)
-    catch_sales = (
-        db.query(func.coalesce(func.sum(CatchSaleLineItem.line_amount), 0))
-        .join(CatchVehicleSale)
-        .filter(
-            extract("year", CatchVehicleSale.sale_date) == year,
-            extract("month", CatchVehicleSale.sale_date) == month,
-        )
-        .scalar()
-    )
-    catch_sales = Decimal(str(catch_sales))
-    return MonthReportOut(
-        year=year,
-        month=month,
-        total_expenses=expenses,
-        total_income=incomes,
-        total_investments=investments,
-        material_payments=material_payments,
-        labour_paid=labour_paid,
-        catch_sales=catch_sales,
-        net=incomes - expenses,
-    )
