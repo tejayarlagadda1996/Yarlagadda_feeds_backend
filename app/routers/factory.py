@@ -177,13 +177,11 @@ def _is_opening_purchase(p: MaterialPurchase) -> bool:
 
 @router.get("/vendors")
 def list_vendor_balances(db: Session = Depends(get_db)):
-    """Vendors with purchase/payment totals and balance due."""
+    """All parties with purchase/payment totals and balance due (0 if none)."""
     suppliers = db.query(Supplier).filter(Supplier.is_active.is_(True)).order_by(Supplier.name).all()
     out = []
     for s in suppliers:
         purchases = db.query(MaterialPurchase).filter(MaterialPurchase.supplier_id == s.id).all()
-        if not purchases:
-            continue
         total_buy = sum((p.total_amount for p in purchases), Decimal("0"))
         total_paid = sum((p.paid_amount for p in purchases), Decimal("0"))
         balance = sum((p.balance_amount for p in purchases), Decimal("0"))
@@ -223,6 +221,9 @@ def add_vendor_opening_balance(
         purchase_date=bal_date,
         quantity=Decimal("1"),
         unit_price=amount,
+        material_amount=amount,
+        transport_amount=Decimal("0"),
+        transport_mode="none",
         total_amount=amount,
         paid_amount=Decimal("0"),
         balance_amount=amount,
