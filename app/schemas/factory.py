@@ -85,6 +85,15 @@ class CloseBalanceIn(BaseModel):
     write_off: bool = False  # true = close without cash (settlement)
 
 
+class PartyPayIn(BaseModel):
+    """Pay a party — amount applied across open bills (oldest first)."""
+
+    amount: Decimal = Field(gt=0)
+    payment_date: date | None = None
+    payment_mode: str = "cash"
+    notes: str | None = None
+
+
 class PaymentIn(BaseModel):
     purchase_id: UUID
     payment_date: date

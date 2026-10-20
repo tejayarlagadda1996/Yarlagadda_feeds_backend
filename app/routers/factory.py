@@ -43,6 +43,7 @@ from app.schemas.factory import (
     MaterialTypeOut,
     CloseBalanceIn,
     OpeningBalanceIn,
+    PartyPayIn,
     PaymentIn,
     PaymentOut,
     PurchaseIn,
@@ -480,6 +481,103 @@ def create_purchase(body: PurchaseIn, db: Session = Depends(get_db)):
     return _purchase_out(db, row)
 
 
+def _apply_party_payment(
+    db: Session,
+    *,
+    supplier: Supplier,
+    amount: Decimal,
+    pay_date: date,
+    payment_mode: str,
+    notes: str | None,
+    write_off: bool = False,
+) -> dict:
+    """Allocate payment oldest-open-bill first; update each bill balance."""
+    open_rows = (
+        db.query(MaterialPurchase)
+        .filter(MaterialPurchase.supplier_id == supplier.id, MaterialPurchase.balance_amount > 0)
+        .order_by(MaterialPurchase.purchase_date.asc(), MaterialPurchase.created_at.asc())
+        .all()
+    )
+    if not open_rows:
+        return {"applied": 0, "amount": 0.0, "bills": 0, "message": "Nothing due"}
+
+    total_due = sum((p.balance_amount for p in open_rows), Decimal("0"))
+    if amount > total_due + Decimal("0.01"):
+        raise HTTPException(400, f"Amount bigger than due ({float(total_due):.0f})")
+
+    remaining = amount.quantize(Decimal("0.01"))
+    applied = Decimal("0")
+    bills = 0
+    allocations: list[dict] = []
+    for p in open_rows:
+        if remaining <= 0:
+            break
+        take = min(remaining, p.balance_amount).quantize(Decimal("0.01"))
+        if take <= 0:
+            continue
+        note = notes or ("Balance closed / settled" if write_off else "Party payment")
+        pay = MaterialPayment(
+            purchase_id=p.id,
+            payment_date=pay_date,
+            amount=take,
+            payment_mode="other" if write_off else payment_mode,
+            notes=note,
+        )
+        db.add(pay)
+        db.flush()
+        if not write_off:
+            db.add(
+                Expense(
+                    expense_date=pay_date,
+                    amount=take,
+                    description=f"Party payment · {supplier.name}",
+                    source_module="material_payment",
+                    source_id=pay.id,
+                )
+            )
+        p.paid_amount += take
+        p.balance_amount = (p.total_amount - p.paid_amount).quantize(Decimal("0.01"))
+        p.payment_status = _payment_status(p.total_amount, p.paid_amount)
+        remaining -= take
+        applied += take
+        bills += 1
+        allocations.append(
+            {
+                "purchase_id": str(p.id),
+                "amount": float(take),
+                "bill_balance_after": float(p.balance_amount),
+            }
+        )
+
+    db.commit()
+    return {
+        "applied": float(applied),
+        "amount": float(applied),
+        "bills": bills,
+        "party": supplier.name,
+        "balance_due_after": float(total_due - applied),
+        "allocations": allocations,
+        "write_off": write_off,
+    }
+
+
+@router.post("/vendors/{supplier_id}/pay")
+def pay_vendor(supplier_id: UUID, body: PartyPayIn, db: Session = Depends(get_db)):
+    """Pay a party any amount — auto-applied to oldest open bills first."""
+    supplier = db.get(Supplier, supplier_id)
+    if not supplier:
+        raise HTTPException(404, "Party not found")
+    return _apply_party_payment(
+        db,
+        supplier=supplier,
+        amount=body.amount,
+        pay_date=body.payment_date or date.today(),
+        payment_mode=body.payment_mode,
+        notes=body.notes,
+        write_off=False,
+    )
+
+
 @router.post("/vendors/{supplier_id}/close-balance")
 def close_vendor_balance(
     supplier_id: UUID,
@@ -493,48 +591,23 @@ def close_vendor_balance(
     open_rows = (
         db.query(MaterialPurchase)
         .filter(MaterialPurchase.supplier_id == supplier_id, MaterialPurchase.balance_amount > 0)
-        .order_by(MaterialPurchase.purchase_date.asc())
         .all()
     )
-    if not open_rows:
+    total_due = sum((p.balance_amount for p in open_rows), Decimal("0"))
+    if total_due <= 0:
         return {"closed": 0, "amount": 0, "message": "Nothing due"}
-
-    pay_date = body.payment_date or date.today()
-    closed = 0
-    total_closed = Decimal("0")
-    for p in open_rows:
-        amt = p.balance_amount
-        if amt <= 0:
-            continue
-        db.add(
-            MaterialPayment(
-                purchase_id=p.id,
-                payment_date=pay_date,
-                amount=amt,
-                payment_mode="other" if body.write_off else body.payment_mode,
-                notes=body.notes or ("Balance closed / settled" if body.write_off else "Balance closed"),
-            )
-        )
-        if not body.write_off:
-            db.add(
-                Expense(
-                    expense_date=pay_date,
-                    amount=amt,
-                    description=f"Close balance · {supplier.name}",
-                    source_module="material_payment",
-                    source_id=p.id,
-                )
-            )
-        p.paid_amount += amt
-        p.balance_amount = Decimal("0")
-        p.payment_status = "paid"
-        closed += 1
-        total_closed += amt
-
-    db.commit()
+    result = _apply_party_payment(
+        db,
+        supplier=supplier,
+        amount=total_due,
+        pay_date=body.payment_date or date.today(),
+        payment_mode=body.payment_mode,
+        notes=body.notes or ("Balance closed / settled" if body.write_off else "Balance closed"),
+        write_off=body.write_off,
+    )
     return {
-        "closed": closed,
-        "amount": float(total_closed),
+        "closed": result["bills"],
+        "amount": result["amount"],
         "write_off": body.write_off,
         "party": supplier.name,
     }
