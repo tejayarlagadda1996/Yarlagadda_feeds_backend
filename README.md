@@ -41,6 +41,8 @@ Required repo secrets:
 
 ## Flutter app
 
+API URL is hard-coded in `mobile/lib/config/api_config.dart` as `ApiConfig.baseUrl`.
+
 ```bash
-flutter run --dart-define=API_BASE_URL=http://35.154.195.118:8000
+cd ../mobile && flutter run -d "iPhone 13 Pro Max"
 ```
