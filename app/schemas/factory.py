@@ -90,6 +90,28 @@ class PurchaseOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class PurchaseImportRow(BaseModel):
+    purchase_date: date
+    material_name: str = Field(min_length=1, max_length=128)
+    party_name: str = Field(min_length=1, max_length=128)
+    vehicle: str | None = None
+    quantity: Decimal = Field(gt=0)
+    unit_price: Decimal = Field(ge=0)
+    transport_mode: str = "none"
+    transport_amount: Decimal = Field(default=Decimal("0"), ge=0)
+    notes: str | None = None
+
+
+class PurchaseImportIn(BaseModel):
+    rows: list[PurchaseImportRow] = Field(min_length=1)
+
+
+class PurchaseImportOut(BaseModel):
+    imported: int
+    skipped: int
+    message: str
+
+
 class CloseBalanceIn(BaseModel):
     """Settle remaining due for a party (pay off open bills)."""
 

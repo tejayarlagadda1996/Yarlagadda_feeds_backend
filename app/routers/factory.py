@@ -1,9 +1,12 @@
+import csv
+import io
 from datetime import date
 from decimal import Decimal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import func
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -47,6 +50,8 @@ from app.schemas.factory import (
     PaymentIn,
     PaymentOut,
     PaymentUpdate,
+    PurchaseImportIn,
+    PurchaseImportOut,
     PurchaseIn,
     PurchaseOut,
     PurchaseUpdate,
@@ -394,15 +399,143 @@ def vendor_ledger(supplier_id: UUID, db: Session = Depends(get_db)):
     }
 
 
-@router.get("/purchases", response_model=list[PurchaseOut])
-def list_purchases(db: Session = Depends(get_db)):
-    rows = (
+def _buying_purchases_query(db: Session):
+    return (
         db.query(MaterialPurchase)
+        .filter(
+            or_(
+                MaterialPurchase.invoice_ref.is_(None),
+                MaterialPurchase.invoice_ref != OPENING_BALANCE_REF,
+            )
+        )
         .order_by(MaterialPurchase.purchase_date.desc(), MaterialPurchase.created_at.desc())
-        .limit(200)
-        .all()
     )
-    return [_purchase_out(db, r) for r in rows if (r.invoice_ref or "") != OPENING_BALANCE_REF]
+
+
+@router.get("/purchases", response_model=list[PurchaseOut])
+def list_purchases(
+    db: Session = Depends(get_db),
+    limit: int = Query(40, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
+    rows = _buying_purchases_query(db).offset(offset).limit(limit).all()
+    return [_purchase_out(db, r) for r in rows]
+
+
+@router.get("/purchases/export.csv")
+def export_purchases_csv(db: Session = Depends(get_db)):
+    rows = _buying_purchases_query(db).all()
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(
+        [
+            "date",
+            "material",
+            "party",
+            "vehicle",
+            "tonnes",
+            "rate",
+            "transport_mode",
+            "transport_amount",
+            "bill_total",
+            "paid",
+            "due",
+            "notes",
+        ]
+    )
+    for r in rows:
+        out = _purchase_out(db, r)
+        writer.writerow(
+            [
+                out.purchase_date.isoformat(),
+                out.material_name or "",
+                out.supplier_name or "",
+                out.vehicle_number or out.invoice_ref or "",
+                float(out.quantity),
+                float(out.unit_price),
+                out.transport_mode or "none",
+                float(out.transport_amount or 0),
+                float(out.total_amount),
+                float(out.paid_amount),
+                float(out.balance_amount),
+                (out.notes or "").replace("\n", " "),
+            ]
+        )
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="buyings.csv"'},
+    )
+
+
+def _get_or_create_material(db: Session, name: str) -> MaterialType:
+    key = name.strip()
+    row = (
+        db.query(MaterialType)
+        .filter(func.lower(MaterialType.name) == key.lower())
+        .first()
+    )
+    if row:
+        return row
+    row = MaterialType(name=key, unit="tonne")
+    db.add(row)
+    db.flush()
+    return row
+
+
+def _get_or_create_supplier(db: Session, name: str) -> Supplier:
+    key = name.strip()
+    row = db.query(Supplier).filter(func.lower(Supplier.name) == key.lower()).first()
+    if row:
+        return row
+    row = Supplier(name=key)
+    db.add(row)
+    db.flush()
+    return row
+
+
+@router.post("/purchases/import", response_model=PurchaseImportOut)
+def import_purchases(body: PurchaseImportIn, db: Session = Depends(get_db)):
+    imported = 0
+    skipped = 0
+    for item in body.rows:
+        try:
+            material = _get_or_create_material(db, item.material_name)
+            supplier = _get_or_create_supplier(db, item.party_name)
+            mode, transport = _normalize_transport(item.transport_mode, item.transport_amount)
+            material_amount = (item.quantity * item.unit_price).quantize(Decimal("0.01"))
+            total = _party_total(material_amount, transport, mode).quantize(Decimal("0.01"))
+            vehicle = (item.vehicle or "").strip() or None
+            row = MaterialPurchase(
+                supplier_id=supplier.id,
+                material_type_id=material.id,
+                purchase_date=item.purchase_date,
+                quantity=item.quantity,
+                unit_price=item.unit_price,
+                material_amount=material_amount,
+                transport_amount=transport,
+                transport_mode=mode,
+                total_amount=total,
+                paid_amount=Decimal("0"),
+                balance_amount=total,
+                payment_status=_payment_status(total, Decimal("0")),
+                invoice_ref=vehicle,
+                notes=item.notes,
+            )
+            db.add(row)
+            db.flush()
+            _bump_inventory(db, material.id, item.quantity, "purchase_in", "purchase", row.id)
+            _sync_transport_expense(db, row)
+            imported += 1
+        except Exception:
+            skipped += 1
+    db.commit()
+    return PurchaseImportOut(
+        imported=imported,
+        skipped=skipped,
+        message=f"Imported {imported} buying(s)" + (f", skipped {skipped}" if skipped else ""),
+    )
 
 
 @router.get("/purchases/{purchase_id}", response_model=PurchaseOut)
