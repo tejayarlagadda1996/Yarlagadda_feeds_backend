@@ -1,0 +1,15 @@
+[Unit]
+Description=Yarlagadda Feeds API
+After=network.target
+
+[Service]
+Type=simple
+User=ec2-user
+WorkingDirectory=/opt/yarlagadda-feeds
+EnvironmentFile=/opt/yarlagadda-feeds/.env
+ExecStart=/opt/yarlagadda-feeds/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

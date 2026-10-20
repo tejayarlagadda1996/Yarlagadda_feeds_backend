@@ -1,0 +1,64 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-ec2
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Sync app to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "app,requirements.txt,sql,deploy,Dockerfile,.env.example"
+          target: /opt/yarlagadda-feeds
+          overwrite: true
+          strip_components: 0
+
+      - name: Install deps and restart service
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            cd /opt/yarlagadda-feeds
+            # App needs Python 3.10+ (uses modern type hints)
+            if ! command -v python3.11 >/dev/null 2>&1; then
+              sudo dnf install -y python3.11 python3.11-pip python3.11-devel
+            fi
+            if [[ ! -d .venv ]] || ! .venv/bin/python -c 'import sys; assert sys.version_info >= (3, 11)' 2>/dev/null; then
+              rm -rf .venv
+              python3.11 -m venv .venv
+            fi
+            .venv/bin/pip install --upgrade pip
+            .venv/bin/pip install -r requirements.txt
+            mkdir -p data
+            if [[ ! -f .env ]]; then
+              JWT=$(openssl rand -hex 32)
+              printf '%s\n' \
+                'ENVIRONMENT=production' \
+                'DATABASE_URL=sqlite:////opt/yarlagadda-feeds/data/yarlagadda_feeds.db' \
+                "JWT_SECRET_KEY=$JWT" \
+                'CORS_ORIGINS=*' > .env
+            fi
+            sudo cp deploy/yarlagadda-feeds.service /etc/systemd/system/yarlagadda-feeds.service
+            sudo systemctl daemon-reload
+            sudo systemctl enable yarlagadda-feeds
+            sudo systemctl restart yarlagadda-feeds
+            sleep 2
+            curl -sf http://127.0.0.1:8000/health
+            echo "Deploy OK"
