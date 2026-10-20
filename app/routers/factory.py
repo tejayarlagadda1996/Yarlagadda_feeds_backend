@@ -173,11 +173,13 @@ def vendor_ledger(supplier_id: UUID, db: Session = Depends(get_db)):
     events: list[dict] = []
     for p in purchases:
         material = db.get(MaterialType, p.material_type_id)
+        buy_at = p.created_at.isoformat() if p.created_at else f"{p.purchase_date.isoformat()}T00:00:00"
         events.append(
             {
                 "id": str(p.id),
                 "type": "buy",
                 "date": p.purchase_date.isoformat(),
+                "sort_at": buy_at,
                 "amount": float(p.total_amount),
                 "title": material.name if material else "Material",
                 "subtitle": f"{float(p.quantity)} tonne · Lorry {p.invoice_ref or '-'}",
@@ -199,11 +201,17 @@ def vendor_ledger(supplier_id: UUID, db: Session = Depends(get_db)):
             .all()
         )
         for pay in payments:
+            pay_at = (
+                pay.created_at.isoformat()
+                if pay.created_at
+                else f"{pay.payment_date.isoformat()}T00:00:00"
+            )
             events.append(
                 {
                     "id": str(pay.id),
                     "type": "pay",
                     "date": pay.payment_date.isoformat(),
+                    "sort_at": pay_at,
                     "amount": float(pay.amount),
                     "title": "Payment",
                     "subtitle": f"For {material.name if material else 'material'} · {pay.payment_mode}",
@@ -219,7 +227,8 @@ def vendor_ledger(supplier_id: UUID, db: Session = Depends(get_db)):
                 }
             )
 
-    events.sort(key=lambda e: e["date"], reverse=True)
+    # Newest first — buy and pay mixed by date/time
+    events.sort(key=lambda e: (e["date"], e.get("sort_at") or e["date"]), reverse=True)
     total_buy = sum((p.total_amount for p in purchases), Decimal("0"))
     total_paid = sum((p.paid_amount for p in purchases), Decimal("0"))
     balance = sum((p.balance_amount for p in purchases), Decimal("0"))
