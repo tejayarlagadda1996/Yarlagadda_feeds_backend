@@ -329,16 +329,24 @@ def vendor_ledger(supplier_id: UUID, db: Session = Depends(get_db)):
                 else f"{pay.payment_date.isoformat()}T00:00:00"
             )
             label = "old balance" if opening else (material.name if material else "material")
+            notes_l = (pay.notes or "").lower()
+            is_write_off = "write off" in notes_l or "written off" in notes_l or (
+                pay.payment_mode == "other" and "settled" in notes_l
+            )
             events.append(
                 {
                     "id": str(pay.id),
-                    "type": "pay",
+                    "type": "write_off" if is_write_off else "pay",
                     "date": pay.payment_date.isoformat(),
                     "sort_at": pay_at,
                     "amount": float(pay.amount),
-                    "title": "Payment",
-                    "subtitle": f"For {label} · {pay.payment_mode}",
-                    "status": "paid",
+                    "title": "Write off" if is_write_off else "Payment",
+                    "subtitle": (
+                        f"Cleared due · {label}"
+                        if is_write_off
+                        else f"For {label} · {pay.payment_mode}"
+                    ),
+                    "status": "written_off" if is_write_off else "paid",
                     "payment_mode": pay.payment_mode,
                     "reference_no": pay.reference_no,
                     "notes": pay.notes,
