@@ -61,7 +61,7 @@ class MaterialPurchase(Base):
     # qty × rate (before transport adjust)
     material_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=0)
     transport_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=0)
-    # none | included | deducted | separate
+    # none | deducted (including) | separate (excluding)
     transport_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="none")
     total_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     paid_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=0)

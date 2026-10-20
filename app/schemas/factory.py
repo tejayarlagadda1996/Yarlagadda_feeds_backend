@@ -48,7 +48,7 @@ class PurchaseIn(BaseModel):
     notes: str | None = None
     paid_now: Decimal = Field(default=Decimal("0"), ge=0)
     transport_amount: Decimal = Field(default=Decimal("0"), ge=0)
-    # none | included | deducted | separate
+    # none | deducted (including) | separate (excluding)
     transport_mode: str = "none"
 
 

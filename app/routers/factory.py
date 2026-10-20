@@ -142,15 +142,15 @@ def create_supplier(body: SupplierIn, db: Session = Depends(get_db)):
 
 
 def _party_total(material_amount: Decimal, transport: Decimal, mode: str) -> Decimal:
-    """Amount owed to the party for this buying."""
+    """Amount owed to the party for this buying.
+
+    Modes:
+    - none: party bill = material only
+    - deducted (including transport): transport deducted from party bill
+    - separate (excluding transport): transport not on party bill
+    """
     if mode == "deducted":
         return max(Decimal("0"), material_amount - transport)
-    if mode == "included" or mode == "add_to_party":
-        # included: rate already has transport; party gets material_amount as-is
-        # add_to_party kept for alias — treat same as separate paid to party = material + transport
-        if mode == "add_to_party":
-            return material_amount + transport
-        return material_amount
     # none | separate — party only for material
     return material_amount
 
@@ -165,10 +165,10 @@ def _purchase_out(db: Session, row: MaterialPurchase) -> PurchaseOut:
     mat = row.material_amount or row.total_amount
     transport = row.transport_amount or Decimal("0")
     mode = row.transport_mode or "none"
-    if mode == "included":
-        out.landed_cost = mat
-    elif transport > 0:
-        out.landed_cost = mat + transport if mode != "included" else mat
+    # Including (deducted): party pays less; our net cost stays material.
+    # Excluding (separate): transport is our extra cost.
+    if mode == "separate" and transport > 0:
+        out.landed_cost = mat + transport
     else:
         out.landed_cost = mat
     return out
@@ -415,11 +415,18 @@ def get_purchase(purchase_id: UUID, db: Session = Depends(get_db)):
 
 def _normalize_transport(mode: str, transport: Decimal) -> tuple[str, Decimal]:
     mode = (mode or "none").strip().lower()
-    if mode not in ("none", "included", "deducted", "separate", "add_to_party"):
+    # Legacy aliases → three options only
+    if mode in ("included", "including"):
+        mode = "deducted"
+    if mode in ("excluding", "add_to_party"):
+        mode = "separate"
+    if mode not in ("none", "deducted", "separate"):
         raise HTTPException(400, "Invalid transport mode")
     transport = (transport or Decimal("0")).quantize(Decimal("0.01"))
-    if transport > 0 and mode == "none":
-        mode = "separate"
+    if mode == "none":
+        transport = Decimal("0")
+    elif transport <= 0:
+        raise HTTPException(400, "Enter transport amount")
     return mode, transport
 
 
@@ -430,28 +437,19 @@ def _sync_transport_expense(db: Session, row: MaterialPurchase) -> None:
     ).delete(synchronize_session=False)
     transport = row.transport_amount or Decimal("0")
     mode = row.transport_mode or "none"
-    if transport <= 0:
+    # Only excluding (separate) counts as our extra transport cost expense.
+    # Including (deducted) is settled against the party bill, not an added cost.
+    if transport <= 0 or mode != "separate":
         return
-    if mode == "included":
-        db.add(
-            Expense(
-                expense_date=row.purchase_date,
-                amount=transport,
-                description=f"Transport (in rate) · vehicle {row.invoice_ref or '-'}",
-                source_module="transport_in_rate",
-                source_id=row.id,
-            )
+    db.add(
+        Expense(
+            expense_date=row.purchase_date,
+            amount=transport,
+            description=f"Transport · vehicle {row.invoice_ref or '-'} · our cost",
+            source_module="transport",
+            source_id=row.id,
         )
-    else:
-        db.add(
-            Expense(
-                expense_date=row.purchase_date,
-                amount=transport,
-                description=f"Transport · vehicle {row.invoice_ref or '-'} · material cost",
-                source_module="transport",
-                source_id=row.id,
-            )
-        )
+    )
 
 
 @router.post("/purchases", response_model=PurchaseOut)
