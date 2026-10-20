@@ -46,8 +46,10 @@ from app.schemas.factory import (
     PartyPayIn,
     PaymentIn,
     PaymentOut,
+    PaymentUpdate,
     PurchaseIn,
     PurchaseOut,
+    PurchaseUpdate,
     SalaryIn,
     SalaryOut,
     SupplierIn,
@@ -411,14 +413,50 @@ def get_purchase(purchase_id: UUID, db: Session = Depends(get_db)):
     return _purchase_out(db, row)
 
 
-@router.post("/purchases", response_model=PurchaseOut)
-def create_purchase(body: PurchaseIn, db: Session = Depends(get_db)):
-    mode = (body.transport_mode or "none").strip().lower()
+def _normalize_transport(mode: str, transport: Decimal) -> tuple[str, Decimal]:
+    mode = (mode or "none").strip().lower()
     if mode not in ("none", "included", "deducted", "separate", "add_to_party"):
         raise HTTPException(400, "Invalid transport mode")
-    transport = (body.transport_amount or Decimal("0")).quantize(Decimal("0.01"))
+    transport = (transport or Decimal("0")).quantize(Decimal("0.01"))
     if transport > 0 and mode == "none":
         mode = "separate"
+    return mode, transport
+
+
+def _sync_transport_expense(db: Session, row: MaterialPurchase) -> None:
+    db.query(Expense).filter(
+        Expense.source_id == row.id,
+        Expense.source_module.in_(("transport", "transport_in_rate")),
+    ).delete(synchronize_session=False)
+    transport = row.transport_amount or Decimal("0")
+    mode = row.transport_mode or "none"
+    if transport <= 0:
+        return
+    if mode == "included":
+        db.add(
+            Expense(
+                expense_date=row.purchase_date,
+                amount=transport,
+                description=f"Transport (in rate) · vehicle {row.invoice_ref or '-'}",
+                source_module="transport_in_rate",
+                source_id=row.id,
+            )
+        )
+    else:
+        db.add(
+            Expense(
+                expense_date=row.purchase_date,
+                amount=transport,
+                description=f"Transport · vehicle {row.invoice_ref or '-'} · material cost",
+                source_module="transport",
+                source_id=row.id,
+            )
+        )
+
+
+@router.post("/purchases", response_model=PurchaseOut)
+def create_purchase(body: PurchaseIn, db: Session = Depends(get_db)):
+    mode, transport = _normalize_transport(body.transport_mode, body.transport_amount or Decimal("0"))
 
     material_amount = (body.quantity * body.unit_price).quantize(Decimal("0.01"))
     total = _party_total(material_amount, transport, mode).quantize(Decimal("0.01"))
@@ -442,29 +480,9 @@ def create_purchase(body: PurchaseIn, db: Session = Depends(get_db)):
     )
     db.add(row)
     db.flush()
-    _bump_inventory(db, body.material_type_id, body.quantity, "purchase_in", "purchase", row.id)
-
-    # Transport always recorded as material expense when charged (not when already inside rate)
-    if transport > 0 and mode != "included":
-        db.add(
-            Expense(
-                expense_date=body.purchase_date,
-                amount=transport,
-                description=f"Transport · vehicle {body.invoice_ref or '-'} · material cost",
-                source_module="transport",
-                source_id=row.id,
-            )
-        )
-    elif transport > 0 and mode == "included":
-        db.add(
-            Expense(
-                expense_date=body.purchase_date,
-                amount=transport,
-                description=f"Transport (in rate) · vehicle {body.invoice_ref or '-'}",
-                source_module="transport_in_rate",
-                source_id=row.id,
-            )
-        )
+    if (row.invoice_ref or "") != OPENING_BALANCE_REF:
+        _bump_inventory(db, body.material_type_id, body.quantity, "purchase_in", "purchase", row.id)
+        _sync_transport_expense(db, row)
 
     if paid > 0:
         db.add(
@@ -484,6 +502,74 @@ def create_purchase(body: PurchaseIn, db: Session = Depends(get_db)):
                 source_id=row.id,
             )
         )
+    db.commit()
+    db.refresh(row)
+    return _purchase_out(db, row)
+
+
+@router.put("/purchases/{purchase_id}", response_model=PurchaseOut)
+def update_purchase(purchase_id: UUID, body: PurchaseUpdate, db: Session = Depends(get_db)):
+    row = db.get(MaterialPurchase, purchase_id)
+    if not row:
+        raise HTTPException(404, "Buying not found")
+
+    opening = _is_opening_purchase(row)
+    old_qty = row.quantity
+    old_material_id = row.material_type_id
+
+    if body.supplier_id is not None:
+        row.supplier_id = body.supplier_id
+    if body.material_type_id is not None and not opening:
+        row.material_type_id = body.material_type_id
+    if body.purchase_date is not None:
+        row.purchase_date = body.purchase_date
+    if body.notes is not None:
+        row.notes = body.notes
+    if body.invoice_ref is not None and not opening:
+        row.invoice_ref = body.invoice_ref
+
+    if opening:
+        # Opening / other due — amount via unit_price (qty stays 1)
+        if body.unit_price is not None:
+            amount = body.unit_price.quantize(Decimal("0.01"))
+            row.unit_price = amount
+            row.material_amount = amount
+            row.total_amount = amount
+            if row.paid_amount > amount:
+                raise HTTPException(400, "Paid already more than new due amount")
+            row.balance_amount = amount - row.paid_amount
+            row.payment_status = _payment_status(amount, row.paid_amount)
+    else:
+        qty = body.quantity if body.quantity is not None else row.quantity
+        rate = body.unit_price if body.unit_price is not None else row.unit_price
+        mode = body.transport_mode if body.transport_mode is not None else (row.transport_mode or "none")
+        transport = (
+            body.transport_amount
+            if body.transport_amount is not None
+            else (row.transport_amount or Decimal("0"))
+        )
+        mode, transport = _normalize_transport(mode, transport)
+        material_amount = (qty * rate).quantize(Decimal("0.01"))
+        total = _party_total(material_amount, transport, mode).quantize(Decimal("0.01"))
+        if row.paid_amount > total:
+            raise HTTPException(400, "Paid already more than new bill total")
+        row.quantity = qty
+        row.unit_price = rate
+        row.material_amount = material_amount
+        row.transport_amount = transport
+        row.transport_mode = mode
+        row.total_amount = total
+        row.balance_amount = total - row.paid_amount
+        row.payment_status = _payment_status(total, row.paid_amount)
+
+        # Inventory adjust for qty / material change
+        if old_material_id != row.material_type_id:
+            _bump_inventory(db, old_material_id, -old_qty, "adjustment", "purchase_edit", row.id)
+            _bump_inventory(db, row.material_type_id, qty, "purchase_in", "purchase_edit", row.id)
+        elif qty != old_qty:
+            _bump_inventory(db, row.material_type_id, qty - old_qty, "adjustment", "purchase_edit", row.id)
+        _sync_transport_expense(db, row)
+
     db.commit()
     db.refresh(row)
     return _purchase_out(db, row)
@@ -637,9 +723,33 @@ def list_inventory(db: Session = Depends(get_db)):
     ]
 
 
+def _payment_out(db: Session, pay: MaterialPayment) -> PaymentOut:
+    out = PaymentOut.model_validate(pay)
+    purchase = db.get(MaterialPurchase, pay.purchase_id)
+    if purchase:
+        s = db.get(Supplier, purchase.supplier_id)
+        m = db.get(MaterialType, purchase.material_type_id)
+        out.supplier_name = s.name if s else None
+        out.material_name = (
+            "Old balance"
+            if _is_opening_purchase(purchase)
+            else (m.name if m else None)
+        )
+    return out
+
+
 @router.get("/payments", response_model=list[PaymentOut])
 def list_payments(db: Session = Depends(get_db)):
-    return db.query(MaterialPayment).order_by(MaterialPayment.payment_date.desc()).limit(200).all()
+    rows = db.query(MaterialPayment).order_by(MaterialPayment.payment_date.desc()).limit(200).all()
+    return [_payment_out(db, r) for r in rows]
+
+
+@router.get("/payments/{payment_id}", response_model=PaymentOut)
+def get_payment(payment_id: UUID, db: Session = Depends(get_db)):
+    pay = db.get(MaterialPayment, payment_id)
+    if not pay:
+        raise HTTPException(404, "Payment not found")
+    return _payment_out(db, pay)
 
 
 @router.post("/payments", response_model=PaymentOut)
@@ -651,6 +761,7 @@ def create_payment(body: PaymentIn, db: Session = Depends(get_db)):
         raise HTTPException(400, "Amount bigger than balance")
     pay = MaterialPayment(**body.model_dump())
     db.add(pay)
+    db.flush()
     purchase.paid_amount += body.amount
     purchase.balance_amount = purchase.total_amount - purchase.paid_amount
     purchase.payment_status = _payment_status(purchase.total_amount, purchase.paid_amount)
@@ -665,7 +776,68 @@ def create_payment(body: PaymentIn, db: Session = Depends(get_db)):
     )
     db.commit()
     db.refresh(pay)
-    return pay
+    return _payment_out(db, pay)
+
+
+@router.put("/payments/{payment_id}", response_model=PaymentOut)
+def update_payment(payment_id: UUID, body: PaymentUpdate, db: Session = Depends(get_db)):
+    pay = db.get(MaterialPayment, payment_id)
+    if not pay:
+        raise HTTPException(404, "Payment not found")
+    purchase = db.get(MaterialPurchase, pay.purchase_id)
+    if not purchase:
+        raise HTTPException(404, "Purchase not found")
+
+    old_amount = pay.amount
+    new_amount = body.amount if body.amount is not None else old_amount
+    max_allowed = purchase.balance_amount + old_amount
+    if new_amount > max_allowed:
+        raise HTTPException(400, "Amount bigger than remaining due on this bill")
+
+    if body.payment_date is not None:
+        pay.payment_date = body.payment_date
+    if body.payment_mode is not None:
+        pay.payment_mode = body.payment_mode
+    if body.reference_no is not None:
+        pay.reference_no = body.reference_no
+    if body.notes is not None:
+        pay.notes = body.notes
+    pay.amount = new_amount
+
+    purchase.paid_amount = purchase.paid_amount - old_amount + new_amount
+    purchase.balance_amount = purchase.total_amount - purchase.paid_amount
+    purchase.payment_status = _payment_status(purchase.total_amount, purchase.paid_amount)
+
+    # Keep linked expense in sync when it was a real payment (not write-off)
+    notes_l = (pay.notes or "").lower()
+    is_write_off = "write off" in notes_l or (
+        pay.payment_mode == "other" and "settled" in notes_l
+    )
+    exp = (
+        db.query(Expense)
+        .filter(Expense.source_module == "material_payment", Expense.source_id == pay.id)
+        .first()
+    )
+    if is_write_off:
+        if exp:
+            db.delete(exp)
+    elif exp:
+        exp.amount = new_amount
+        exp.expense_date = pay.payment_date
+    else:
+        db.add(
+            Expense(
+                expense_date=pay.payment_date,
+                amount=new_amount,
+                description="Supplier payment",
+                source_module="material_payment",
+                source_id=pay.id,
+            )
+        )
+
+    db.commit()
+    db.refresh(pay)
+    return _payment_out(db, pay)
 
 
 # ---------- Labour ----------

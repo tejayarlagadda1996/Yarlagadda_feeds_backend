@@ -52,6 +52,20 @@ class PurchaseIn(BaseModel):
     transport_mode: str = "none"
 
 
+class PurchaseUpdate(BaseModel):
+    """Edit an existing buying / opening due."""
+
+    supplier_id: UUID | None = None
+    material_type_id: UUID | None = None
+    purchase_date: date | None = None
+    quantity: Decimal | None = Field(default=None, gt=0)
+    unit_price: Decimal | None = Field(default=None, ge=0)
+    invoice_ref: str | None = None
+    notes: str | None = None
+    transport_amount: Decimal | None = Field(default=None, ge=0)
+    transport_mode: str | None = None
+
+
 class PurchaseOut(BaseModel):
     id: UUID
     supplier_id: UUID
@@ -103,6 +117,16 @@ class PaymentIn(BaseModel):
     notes: str | None = None
 
 
+class PaymentUpdate(BaseModel):
+    """Edit a payment / write-off entry."""
+
+    payment_date: date | None = None
+    amount: Decimal | None = Field(default=None, gt=0)
+    payment_mode: str | None = None
+    reference_no: str | None = None
+    notes: str | None = None
+
+
 class OpeningBalanceIn(BaseModel):
     """Old money still owed to a vendor before app tracking started."""
 
@@ -119,6 +143,8 @@ class PaymentOut(BaseModel):
     payment_mode: str
     reference_no: str | None
     notes: str | None
+    supplier_name: str | None = None
+    material_name: str | None = None
 
     model_config = {"from_attributes": True}
 
