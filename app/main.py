@@ -8,6 +8,7 @@ from app.database import Base, SessionLocal, engine
 from app.models import entities  # noqa: F401 — register models
 from app.routers import factory, modules
 from app.services.bootstrap import bootstrap_db
+from app.services.migrate import ensure_schema
 
 settings = get_settings()
 
@@ -15,6 +16,7 @@ settings = get_settings()
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     Base.metadata.create_all(bind=engine)
+    ensure_schema(engine)
     db = SessionLocal()
     try:
         bootstrap_db(db)

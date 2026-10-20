@@ -36,12 +36,16 @@ CREATE TABLE IF NOT EXISTS material_purchases (
     purchase_date   DATE NOT NULL,
     quantity        NUMERIC(14, 3) NOT NULL CHECK (quantity > 0),
     unit_price      NUMERIC(14, 2) NOT NULL CHECK (unit_price >= 0),
-    total_amount    NUMERIC(14, 2) NOT NULL CHECK (total_amount >= 0),
+    material_amount NUMERIC(14, 2) NOT NULL DEFAULT 0, -- qty × rate
+    transport_amount NUMERIC(14, 2) NOT NULL DEFAULT 0,
+    transport_mode  VARCHAR(32) NOT NULL DEFAULT 'none'
+        CHECK (transport_mode IN ('none', 'included', 'deducted', 'separate', 'add_to_party')),
+    total_amount    NUMERIC(14, 2) NOT NULL CHECK (total_amount >= 0), -- owed to party
     paid_amount     NUMERIC(14, 2) NOT NULL DEFAULT 0 CHECK (paid_amount >= 0),
     balance_amount  NUMERIC(14, 2) NOT NULL DEFAULT 0,
     payment_status  VARCHAR(32) NOT NULL DEFAULT 'unpaid'
         CHECK (payment_status IN ('unpaid', 'partial', 'paid')),
-    invoice_ref     VARCHAR(64),
+    invoice_ref     VARCHAR(64), -- vehicle / lorry number
     notes           TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()

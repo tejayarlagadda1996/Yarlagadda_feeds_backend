@@ -41,6 +41,7 @@ from app.schemas.factory import (
     LabourerOut,
     MaterialTypeIn,
     MaterialTypeOut,
+    CloseBalanceIn,
     OpeningBalanceIn,
     PaymentIn,
     PaymentOut,
@@ -113,7 +114,19 @@ def create_material_type(body: MaterialTypeIn, db: Session = Depends(get_db)):
 
 @router.get("/suppliers", response_model=list[SupplierOut])
 def list_suppliers(db: Session = Depends(get_db)):
-    return db.query(Supplier).filter(Supplier.is_active.is_(True)).order_by(Supplier.name).all()
+    """Most recently used parties first (handy when adding a buying)."""
+    suppliers = db.query(Supplier).filter(Supplier.is_active.is_(True)).all()
+    last_map: dict = {}
+    for sid, last_at in (
+        db.query(MaterialPurchase.supplier_id, func.max(MaterialPurchase.created_at))
+        .group_by(MaterialPurchase.supplier_id)
+        .all()
+    ):
+        last_map[sid] = last_at
+    suppliers.sort(
+        key=lambda s: (0 if s.id in last_map else 1, -(last_map[s.id].timestamp() if s.id in last_map else 0), s.name)
+    )
+    return suppliers
 
 
 @router.post("/suppliers", response_model=SupplierOut)
@@ -123,6 +136,39 @@ def create_supplier(body: SupplierIn, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(row)
     return row
+
+
+def _party_total(material_amount: Decimal, transport: Decimal, mode: str) -> Decimal:
+    """Amount owed to the party for this buying."""
+    if mode == "deducted":
+        return max(Decimal("0"), material_amount - transport)
+    if mode == "included" or mode == "add_to_party":
+        # included: rate already has transport; party gets material_amount as-is
+        # add_to_party kept for alias — treat same as separate paid to party = material + transport
+        if mode == "add_to_party":
+            return material_amount + transport
+        return material_amount
+    # none | separate — party only for material
+    return material_amount
+
+
+def _purchase_out(db: Session, row: MaterialPurchase) -> PurchaseOut:
+    out = PurchaseOut.model_validate(row)
+    s = db.get(Supplier, row.supplier_id)
+    m = db.get(MaterialType, row.material_type_id)
+    out.supplier_name = s.name if s else None
+    out.material_name = m.name if m else None
+    out.vehicle_number = row.invoice_ref
+    mat = row.material_amount or row.total_amount
+    transport = row.transport_amount or Decimal("0")
+    mode = row.transport_mode or "none"
+    if mode == "included":
+        out.landed_cost = mat
+    elif transport > 0:
+        out.landed_cost = mat + transport if mode != "included" else mat
+    else:
+        out.landed_cost = mat
+    return out
 
 
 def _is_opening_purchase(p: MaterialPurchase) -> bool:
@@ -238,6 +284,12 @@ def vendor_ledger(supplier_id: UUID, db: Session = Depends(get_db)):
                 }
             )
         else:
+            vehicle = p.invoice_ref or "-"
+            transport = float(p.transport_amount or 0)
+            tmode = p.transport_mode or "none"
+            sub = f"{float(p.quantity)} t · Vehicle {vehicle}"
+            if transport > 0:
+                sub += f" · Transport ₹{transport:.0f} ({tmode})"
             events.append(
                 {
                     "id": str(p.id),
@@ -246,13 +298,17 @@ def vendor_ledger(supplier_id: UUID, db: Session = Depends(get_db)):
                     "sort_at": buy_at,
                     "amount": float(p.total_amount),
                     "title": material.name if material else "Material",
-                    "subtitle": f"{float(p.quantity)} tonne · Lorry {p.invoice_ref or '-'}",
+                    "subtitle": sub,
                     "status": p.payment_status,
                     "balance_amount": float(p.balance_amount),
                     "paid_amount": float(p.paid_amount),
                     "unit_price": float(p.unit_price),
                     "quantity": float(p.quantity),
                     "lorry": p.invoice_ref,
+                    "vehicle_number": p.invoice_ref,
+                    "transport_amount": transport,
+                    "transport_mode": tmode,
+                    "material_amount": float(p.material_amount or p.total_amount),
                     "notes": p.notes,
                     "purchase_id": str(p.id),
                     "material_name": material.name if material else None,
@@ -328,28 +384,45 @@ def vendor_ledger(supplier_id: UUID, db: Session = Depends(get_db)):
 
 @router.get("/purchases", response_model=list[PurchaseOut])
 def list_purchases(db: Session = Depends(get_db)):
-    rows = db.query(MaterialPurchase).order_by(MaterialPurchase.purchase_date.desc()).limit(200).all()
-    out: list[PurchaseOut] = []
-    for r in rows:
-        p = PurchaseOut.model_validate(r)
-        s = db.get(Supplier, r.supplier_id)
-        m = db.get(MaterialType, r.material_type_id)
-        p.supplier_name = s.name if s else None
-        p.material_name = m.name if m else None
-        out.append(p)
-    return out
+    rows = (
+        db.query(MaterialPurchase)
+        .order_by(MaterialPurchase.purchase_date.desc(), MaterialPurchase.created_at.desc())
+        .limit(200)
+        .all()
+    )
+    return [_purchase_out(db, r) for r in rows if (r.invoice_ref or "") != OPENING_BALANCE_REF]
+
+
+@router.get("/purchases/{purchase_id}", response_model=PurchaseOut)
+def get_purchase(purchase_id: UUID, db: Session = Depends(get_db)):
+    row = db.get(MaterialPurchase, purchase_id)
+    if not row:
+        raise HTTPException(404, "Buying not found")
+    return _purchase_out(db, row)
 
 
 @router.post("/purchases", response_model=PurchaseOut)
 def create_purchase(body: PurchaseIn, db: Session = Depends(get_db)):
-    total = (body.quantity * body.unit_price).quantize(Decimal("0.01"))
+    mode = (body.transport_mode or "none").strip().lower()
+    if mode not in ("none", "included", "deducted", "separate", "add_to_party"):
+        raise HTTPException(400, "Invalid transport mode")
+    transport = (body.transport_amount or Decimal("0")).quantize(Decimal("0.01"))
+    if transport > 0 and mode == "none":
+        mode = "separate"
+
+    material_amount = (body.quantity * body.unit_price).quantize(Decimal("0.01"))
+    total = _party_total(material_amount, transport, mode).quantize(Decimal("0.01"))
     paid = min(body.paid_now, total)
+
     row = MaterialPurchase(
         supplier_id=body.supplier_id,
         material_type_id=body.material_type_id,
         purchase_date=body.purchase_date,
         quantity=body.quantity,
         unit_price=body.unit_price,
+        material_amount=material_amount,
+        transport_amount=transport,
+        transport_mode=mode,
         total_amount=total,
         paid_amount=paid,
         balance_amount=total - paid,
@@ -360,6 +433,29 @@ def create_purchase(body: PurchaseIn, db: Session = Depends(get_db)):
     db.add(row)
     db.flush()
     _bump_inventory(db, body.material_type_id, body.quantity, "purchase_in", "purchase", row.id)
+
+    # Transport always recorded as material expense when charged (not when already inside rate)
+    if transport > 0 and mode != "included":
+        db.add(
+            Expense(
+                expense_date=body.purchase_date,
+                amount=transport,
+                description=f"Transport · vehicle {body.invoice_ref or '-'} · material cost",
+                source_module="transport",
+                source_id=row.id,
+            )
+        )
+    elif transport > 0 and mode == "included":
+        db.add(
+            Expense(
+                expense_date=body.purchase_date,
+                amount=transport,
+                description=f"Transport (in rate) · vehicle {body.invoice_ref or '-'}",
+                source_module="transport_in_rate",
+                source_id=row.id,
+            )
+        )
+
     if paid > 0:
         db.add(
             MaterialPayment(
@@ -373,19 +469,74 @@ def create_purchase(body: PurchaseIn, db: Session = Depends(get_db)):
             Expense(
                 expense_date=body.purchase_date,
                 amount=paid,
-                description=f"Material payment",
+                description="Party payment on buying",
                 source_module="material_payment",
                 source_id=row.id,
             )
         )
     db.commit()
     db.refresh(row)
-    out = PurchaseOut.model_validate(row)
-    s = db.get(Supplier, row.supplier_id)
-    m = db.get(MaterialType, row.material_type_id)
-    out.supplier_name = s.name if s else None
-    out.material_name = m.name if m else None
-    return out
+    return _purchase_out(db, row)
+
+
+@router.post("/vendors/{supplier_id}/close-balance")
+def close_vendor_balance(
+    supplier_id: UUID,
+    body: CloseBalanceIn,
+    db: Session = Depends(get_db),
+):
+    """Pay off or write-off all open dues for a party."""
+    supplier = db.get(Supplier, supplier_id)
+    if not supplier:
+        raise HTTPException(404, "Party not found")
+    open_rows = (
+        db.query(MaterialPurchase)
+        .filter(MaterialPurchase.supplier_id == supplier_id, MaterialPurchase.balance_amount > 0)
+        .order_by(MaterialPurchase.purchase_date.asc())
+        .all()
+    )
+    if not open_rows:
+        return {"closed": 0, "amount": 0, "message": "Nothing due"}
+
+    pay_date = body.payment_date or date.today()
+    closed = 0
+    total_closed = Decimal("0")
+    for p in open_rows:
+        amt = p.balance_amount
+        if amt <= 0:
+            continue
+        db.add(
+            MaterialPayment(
+                purchase_id=p.id,
+                payment_date=pay_date,
+                amount=amt,
+                payment_mode="other" if body.write_off else body.payment_mode,
+                notes=body.notes or ("Balance closed / settled" if body.write_off else "Balance closed"),
+            )
+        )
+        if not body.write_off:
+            db.add(
+                Expense(
+                    expense_date=pay_date,
+                    amount=amt,
+                    description=f"Close balance · {supplier.name}",
+                    source_module="material_payment",
+                    source_id=p.id,
+                )
+            )
+        p.paid_amount += amt
+        p.balance_amount = Decimal("0")
+        p.payment_status = "paid"
+        closed += 1
+        total_closed += amt
+
+    db.commit()
+    return {
+        "closed": closed,
+        "amount": float(total_closed),
+        "write_off": body.write_off,
+        "party": supplier.name,
+    }
 
 
 @router.get("/inventory")

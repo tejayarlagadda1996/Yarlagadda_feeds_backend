@@ -58,11 +58,16 @@ class MaterialPurchase(Base):
     purchase_date: Mapped[date] = mapped_column(Date, nullable=False)
     quantity: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False)
     unit_price: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    # qty × rate (before transport adjust)
+    material_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=0)
+    transport_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=0)
+    # none | included | deducted | separate
+    transport_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="none")
     total_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     paid_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=0)
     balance_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=0)
     payment_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unpaid")
-    invoice_ref: Mapped[str | None] = mapped_column(String(64))
+    invoice_ref: Mapped[str | None] = mapped_column(String(64))  # vehicle / lorry no
     notes: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

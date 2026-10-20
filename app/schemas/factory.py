@@ -44,9 +44,12 @@ class PurchaseIn(BaseModel):
     purchase_date: date
     quantity: Decimal = Field(gt=0)
     unit_price: Decimal = Field(ge=0)
-    invoice_ref: str | None = None
+    invoice_ref: str | None = None  # vehicle / lorry number
     notes: str | None = None
     paid_now: Decimal = Field(default=Decimal("0"), ge=0)
+    transport_amount: Decimal = Field(default=Decimal("0"), ge=0)
+    # none | included | deducted | separate
+    transport_mode: str = "none"
 
 
 class PurchaseOut(BaseModel):
@@ -56,6 +59,9 @@ class PurchaseOut(BaseModel):
     purchase_date: date
     quantity: Money
     unit_price: Money
+    material_amount: Money = Decimal("0")
+    transport_amount: Money = Decimal("0")
+    transport_mode: str = "none"
     total_amount: Money
     paid_amount: Money
     balance_amount: Money
@@ -64,8 +70,19 @@ class PurchaseOut(BaseModel):
     notes: str | None
     supplier_name: str | None = None
     material_name: str | None = None
+    vehicle_number: str | None = None
+    landed_cost: Money | None = None
 
     model_config = {"from_attributes": True}
+
+
+class CloseBalanceIn(BaseModel):
+    """Settle remaining due for a party (pay off open bills)."""
+
+    payment_date: date | None = None
+    payment_mode: str = "cash"
+    notes: str | None = None
+    write_off: bool = False  # true = close without cash (settlement)
 
 
 class PaymentIn(BaseModel):
