@@ -77,6 +77,14 @@ class PaymentIn(BaseModel):
     notes: str | None = None
 
 
+class OpeningBalanceIn(BaseModel):
+    """Old money still owed to a vendor before app tracking started."""
+
+    amount: Decimal = Field(gt=0)
+    balance_date: date | None = None
+    notes: str | None = None
+
+
 class PaymentOut(BaseModel):
     id: UUID
     purchase_id: UUID

@@ -41,6 +41,7 @@ from app.schemas.factory import (
     LabourerOut,
     MaterialTypeIn,
     MaterialTypeOut,
+    OpeningBalanceIn,
     PaymentIn,
     PaymentOut,
     PurchaseIn,
@@ -52,6 +53,7 @@ from app.schemas.factory import (
     VehicleSaleIn,
     VehicleSaleOut,
 )
+from app.services.bootstrap import OPENING_BALANCE_MATERIAL, OPENING_BALANCE_REF, ensure_opening_balance_material
 
 router = APIRouter(tags=["factory"])
 
@@ -89,7 +91,15 @@ def _bump_inventory(db: Session, material_type_id: UUID, qty: Decimal, txn_type:
 # ---------- Materials ----------
 @router.get("/material-types", response_model=list[MaterialTypeOut])
 def list_material_types(db: Session = Depends(get_db)):
-    return db.query(MaterialType).filter(MaterialType.is_active.is_(True)).order_by(MaterialType.name).all()
+    return (
+        db.query(MaterialType)
+        .filter(
+            MaterialType.is_active.is_(True),
+            MaterialType.name != OPENING_BALANCE_MATERIAL,
+        )
+        .order_by(MaterialType.name)
+        .all()
+    )
 
 
 @router.post("/material-types", response_model=MaterialTypeOut)
@@ -113,6 +123,10 @@ def create_supplier(body: SupplierIn, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(row)
     return row
+
+
+def _is_opening_purchase(p: MaterialPurchase) -> bool:
+    return (p.invoice_ref or "") == OPENING_BALANCE_REF
 
 
 @router.get("/vendors")
@@ -142,6 +156,48 @@ def list_vendor_balances(db: Session = Depends(get_db)):
     return out
 
 
+@router.post("/vendors/{supplier_id}/opening-balance")
+def add_vendor_opening_balance(
+    supplier_id: UUID,
+    body: OpeningBalanceIn,
+    db: Session = Depends(get_db),
+):
+    """Record old money still owed to this vendor (does not change stock)."""
+    supplier = db.get(Supplier, supplier_id)
+    if not supplier:
+        raise HTTPException(404, "Vendor not found")
+
+    amount = body.amount.quantize(Decimal("0.01"))
+    bal_date = body.balance_date or date.today()
+    material = ensure_opening_balance_material(db)
+
+    row = MaterialPurchase(
+        supplier_id=supplier.id,
+        material_type_id=material.id,
+        purchase_date=bal_date,
+        quantity=Decimal("1"),
+        unit_price=amount,
+        total_amount=amount,
+        paid_amount=Decimal("0"),
+        balance_amount=amount,
+        payment_status="unpaid",
+        invoice_ref=OPENING_BALANCE_REF,
+        notes=body.notes or "Old balance brought into app",
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {
+        "id": str(row.id),
+        "supplier_id": str(supplier.id),
+        "supplier_name": supplier.name,
+        "amount": float(amount),
+        "balance_date": bal_date.isoformat(),
+        "notes": row.notes,
+        "balance_due": float(row.balance_amount),
+    }
+
+
 @router.get("/vendors/{supplier_id}/ledger")
 def vendor_ledger(supplier_id: UUID, db: Session = Depends(get_db)):
     """Chronological buy + pay history for one vendor."""
@@ -159,26 +215,49 @@ def vendor_ledger(supplier_id: UUID, db: Session = Depends(get_db)):
     for p in purchases:
         material = db.get(MaterialType, p.material_type_id)
         buy_at = p.created_at.isoformat() if p.created_at else f"{p.purchase_date.isoformat()}T00:00:00"
-        events.append(
-            {
-                "id": str(p.id),
-                "type": "buy",
-                "date": p.purchase_date.isoformat(),
-                "sort_at": buy_at,
-                "amount": float(p.total_amount),
-                "title": material.name if material else "Material",
-                "subtitle": f"{float(p.quantity)} tonne · Lorry {p.invoice_ref or '-'}",
-                "status": p.payment_status,
-                "balance_amount": float(p.balance_amount),
-                "paid_amount": float(p.paid_amount),
-                "unit_price": float(p.unit_price),
-                "quantity": float(p.quantity),
-                "lorry": p.invoice_ref,
-                "notes": p.notes,
-                "purchase_id": str(p.id),
-                "material_name": material.name if material else None,
-            }
-        )
+        opening = _is_opening_purchase(p)
+        if opening:
+            events.append(
+                {
+                    "id": str(p.id),
+                    "type": "opening",
+                    "date": p.purchase_date.isoformat(),
+                    "sort_at": buy_at,
+                    "amount": float(p.total_amount),
+                    "title": "Old balance",
+                    "subtitle": p.notes or "Brought forward",
+                    "status": p.payment_status,
+                    "balance_amount": float(p.balance_amount),
+                    "paid_amount": float(p.paid_amount),
+                    "unit_price": float(p.unit_price),
+                    "quantity": float(p.quantity),
+                    "lorry": None,
+                    "notes": p.notes,
+                    "purchase_id": str(p.id),
+                    "material_name": "Old balance",
+                }
+            )
+        else:
+            events.append(
+                {
+                    "id": str(p.id),
+                    "type": "buy",
+                    "date": p.purchase_date.isoformat(),
+                    "sort_at": buy_at,
+                    "amount": float(p.total_amount),
+                    "title": material.name if material else "Material",
+                    "subtitle": f"{float(p.quantity)} tonne · Lorry {p.invoice_ref or '-'}",
+                    "status": p.payment_status,
+                    "balance_amount": float(p.balance_amount),
+                    "paid_amount": float(p.paid_amount),
+                    "unit_price": float(p.unit_price),
+                    "quantity": float(p.quantity),
+                    "lorry": p.invoice_ref,
+                    "notes": p.notes,
+                    "purchase_id": str(p.id),
+                    "material_name": material.name if material else None,
+                }
+            )
         payments = (
             db.query(MaterialPayment)
             .filter(MaterialPayment.purchase_id == p.id)
@@ -191,6 +270,7 @@ def vendor_ledger(supplier_id: UUID, db: Session = Depends(get_db)):
                 if pay.created_at
                 else f"{pay.payment_date.isoformat()}T00:00:00"
             )
+            label = "old balance" if opening else (material.name if material else "material")
             events.append(
                 {
                     "id": str(pay.id),
@@ -199,14 +279,14 @@ def vendor_ledger(supplier_id: UUID, db: Session = Depends(get_db)):
                     "sort_at": pay_at,
                     "amount": float(pay.amount),
                     "title": "Payment",
-                    "subtitle": f"For {material.name if material else 'material'} · {pay.payment_mode}",
+                    "subtitle": f"For {label} · {pay.payment_mode}",
                     "status": "paid",
                     "payment_mode": pay.payment_mode,
                     "reference_no": pay.reference_no,
                     "notes": pay.notes,
                     "purchase_id": str(p.id),
-                    "material_name": material.name if material else None,
-                    "lorry": p.invoice_ref,
+                    "material_name": "Old balance" if opening else (material.name if material else None),
+                    "lorry": None if opening else p.invoice_ref,
                     "purchase_total": float(p.total_amount),
                     "purchase_balance": float(p.balance_amount),
                 }
@@ -226,8 +306,16 @@ def vendor_ledger(supplier_id: UUID, db: Session = Depends(get_db)):
         "open_purchases": [
             {
                 "id": str(p.id),
-                "material_name": (db.get(MaterialType, p.material_type_id).name if db.get(MaterialType, p.material_type_id) else "Material"),
-                "lorry": p.invoice_ref,
+                "material_name": (
+                    "Old balance"
+                    if _is_opening_purchase(p)
+                    else (
+                        db.get(MaterialType, p.material_type_id).name
+                        if db.get(MaterialType, p.material_type_id)
+                        else "Material"
+                    )
+                ),
+                "lorry": None if _is_opening_purchase(p) else p.invoice_ref,
                 "date": p.purchase_date.isoformat(),
                 "total_amount": float(p.total_amount),
                 "balance_amount": float(p.balance_amount),
