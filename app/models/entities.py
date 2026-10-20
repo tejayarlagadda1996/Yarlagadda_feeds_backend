@@ -324,3 +324,52 @@ class Investment(Base):
     investor_name: Mapped[str | None] = mapped_column(String(128))
     description: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# ---- Independent Interest module (taken / given loans) ----
+
+
+class InterestParty(Base):
+    __tablename__ = "interest_parties"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    phone: Mapped[str | None] = mapped_column(String(32))
+    notes: Mapped[str | None] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class InterestLoan(Base):
+    """One taken/given amount with a party at simple interest."""
+
+    __tablename__ = "interest_loans"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=_uuid)
+    party_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("interest_parties.id"), nullable=False)
+    # taken = we borrowed from party; given = we lent to party
+    direction: Mapped[str] = mapped_column(String(16), nullable=False)
+    principal: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    # Simple interest % per month (common for private lending)
+    rate_percent_per_month: Mapped[Decimal] = mapped_column(Numeric(8, 4), nullable=False)
+    start_date: Mapped[date] = mapped_column(Date, nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text)
+    # open | closed
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="open")
+    closed_date: Mapped[date | None] = mapped_column(Date)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    payments: Mapped[list["InterestPayment"]] = relationship(back_populates="loan")
+
+
+class InterestPayment(Base):
+    __tablename__ = "interest_payments"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=_uuid)
+    loan_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("interest_loans.id"), nullable=False)
+    payment_date: Mapped[date] = mapped_column(Date, nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    loan: Mapped["InterestLoan"] = relationship(back_populates="payments")

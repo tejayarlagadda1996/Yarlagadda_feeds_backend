@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import get_settings
 from app.database import Base, SessionLocal, engine
 from app.models import entities  # noqa: F401 — register models
-from app.routers import factory, modules
+from app.routers import factory, interest, modules
 from app.services.bootstrap import bootstrap_db
 from app.services.migrate import ensure_schema
 
@@ -37,6 +37,7 @@ app.add_middleware(
 
 app.include_router(modules.router, prefix=settings.api_prefix)
 app.include_router(factory.router, prefix=settings.api_prefix)
+app.include_router(interest.router, prefix=settings.api_prefix)
 
 
 @app.get("/health")

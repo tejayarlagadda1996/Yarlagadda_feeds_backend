@@ -33,6 +33,13 @@ FACTORY_MODULES: list[ModuleInfo] = [
         status="ready",
         icon="set_meal",
     ),
+    ModuleInfo(
+        id="interest",
+        title="Interest",
+        description="Taken & given loans",
+        status="ready",
+        icon="percent",
+    ),
 ]
 
 

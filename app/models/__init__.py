@@ -11,6 +11,9 @@ from app.models.entities import (
     FishTank,
     FishType,
     Income,
+    InterestLoan,
+    InterestParty,
+    InterestPayment,
     InventoryTransaction,
     Investment,
     LabourAdvance,
@@ -46,4 +49,7 @@ __all__ = [
     "Expense",
     "Income",
     "Investment",
+    "InterestParty",
+    "InterestLoan",
+    "InterestPayment",
 ]
