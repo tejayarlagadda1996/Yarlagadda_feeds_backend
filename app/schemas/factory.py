@@ -13,7 +13,7 @@ Money = Annotated[Decimal, PlainSerializer(lambda v: float(v), return_type=float
 # ---- Materials / suppliers / purchases / payments ----
 class MaterialTypeIn(BaseModel):
     name: str = Field(min_length=1, max_length=128)
-    unit: str = "kg"
+    unit: str = "tonne"
     description: str | None = None
 
 

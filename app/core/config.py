@@ -10,19 +10,10 @@ class Settings(BaseSettings):
     environment: str = "development"
     api_prefix: str = "/api/v1"
 
-    # Use SQLite locally by default; set DATABASE_URL for PostgreSQL (AWS RDS)
+    # SQLite locally; Postgres via DATABASE_URL on AWS if needed
     database_url: str = "sqlite:///./yarlagadda_feeds.db"
 
-    jwt_secret_key: str = "change-me-in-production-use-long-random-string"
-    jwt_algorithm: str = "HS256"
-    access_token_expire_minutes: int = 60 * 24 * 7  # 7 days
-
     cors_origins: str = "*"
-
-    # Seed admin (created on startup if missing)
-    admin_username: str = "admin"
-    admin_password: str = "admin123"
-    admin_full_name: str = "Factory Admin"
 
     @property
     def cors_origin_list(self) -> list[str]:

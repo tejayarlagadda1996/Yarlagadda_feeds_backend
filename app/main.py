@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import get_settings
 from app.database import Base, SessionLocal, engine
 from app.models import entities  # noqa: F401 — register models
-from app.routers import auth, factory, modules
+from app.routers import factory, modules
 from app.services.bootstrap import bootstrap_db
 
 settings = get_settings()
@@ -33,7 +33,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(auth.router, prefix=settings.api_prefix)
 app.include_router(modules.router, prefix=settings.api_prefix)
 app.include_router(factory.router, prefix=settings.api_prefix)
 

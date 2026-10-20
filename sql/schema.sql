@@ -3,19 +3,6 @@
 
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
--- ---------------------------------------------------------------------------
--- Auth
--- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS users (
-    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    username        VARCHAR(64) NOT NULL UNIQUE,
-    full_name       VARCHAR(128) NOT NULL,
-    password_hash   VARCHAR(255) NOT NULL,
-    role            VARCHAR(32) NOT NULL DEFAULT 'admin',
-    is_active       BOOLEAN NOT NULL DEFAULT TRUE,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
 
 -- ---------------------------------------------------------------------------
 -- Master: material types & suppliers
@@ -23,7 +10,7 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS material_types (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name            VARCHAR(128) NOT NULL UNIQUE,
-    unit            VARCHAR(32) NOT NULL DEFAULT 'kg', -- kg, bag, litre, etc.
+    unit            VARCHAR(32) NOT NULL DEFAULT 'tonne', -- tonne, kg, bag, etc.
     description     TEXT,
     is_active       BOOLEAN NOT NULL DEFAULT TRUE,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -56,7 +43,6 @@ CREATE TABLE IF NOT EXISTS material_purchases (
         CHECK (payment_status IN ('unpaid', 'partial', 'paid')),
     invoice_ref     VARCHAR(64),
     notes           TEXT,
-    created_by      UUID REFERENCES users(id),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -70,7 +56,6 @@ CREATE TABLE IF NOT EXISTS material_payments (
         CHECK (payment_mode IN ('cash', 'upi', 'bank', 'cheque', 'other')),
     reference_no    VARCHAR(64),
     notes           TEXT,
-    created_by      UUID REFERENCES users(id),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -91,7 +76,6 @@ CREATE TABLE IF NOT EXISTS inventory_transactions (
     reference_id    UUID,
     notes           TEXT,
     txn_date        DATE NOT NULL DEFAULT CURRENT_DATE,
-    created_by      UUID REFERENCES users(id),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -119,7 +103,6 @@ CREATE TABLE IF NOT EXISTS labour_advances (
         CHECK (advance_type IN ('weekly', 'adhoc', 'festival', 'other')),
     salary_month    DATE NOT NULL, -- first day of month this advance applies to
     notes           TEXT,
-    created_by      UUID REFERENCES users(id),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -133,7 +116,6 @@ CREATE TABLE IF NOT EXISTS labour_salary_payments (
     payment_date    DATE NOT NULL,
     payment_mode    VARCHAR(32) NOT NULL DEFAULT 'cash',
     notes           TEXT,
-    created_by      UUID REFERENCES users(id),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE (labourer_id, salary_month)
 );
@@ -175,7 +157,6 @@ CREATE TABLE IF NOT EXISTS catch_events (
     catch_end_date  DATE,
     cycle_months    SMALLINT CHECK (cycle_months IN (3, 4, 6) OR cycle_months IS NULL),
     notes           TEXT,
-    created_by      UUID REFERENCES users(id),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -187,7 +168,6 @@ CREATE TABLE IF NOT EXISTS catch_vehicle_sales (
     sale_date       DATE NOT NULL,
     driver_name     VARCHAR(128),
     notes           TEXT,
-    created_by      UUID REFERENCES users(id),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -210,7 +190,6 @@ CREATE TABLE IF NOT EXISTS feed_batches (
     batch_date      DATE NOT NULL,
     total_qty_kg    NUMERIC(14, 3) NOT NULL DEFAULT 0,
     notes           TEXT,
-    created_by      UUID REFERENCES users(id),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -250,7 +229,6 @@ CREATE TABLE IF NOT EXISTS expenses (
     description     TEXT,
     source_module   VARCHAR(64), -- material_payment, labour_salary, manual, etc.
     source_id       UUID,
-    created_by      UUID REFERENCES users(id),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -261,7 +239,6 @@ CREATE TABLE IF NOT EXISTS incomes (
     description     TEXT,
     source_module   VARCHAR(64), -- catch_sale, manual, etc.
     source_id       UUID,
-    created_by      UUID REFERENCES users(id),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -271,7 +248,6 @@ CREATE TABLE IF NOT EXISTS investments (
     amount          NUMERIC(14, 2) NOT NULL CHECK (amount > 0),
     investor_name   VARCHAR(128),
     description     TEXT,
-    created_by      UUID REFERENCES users(id),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

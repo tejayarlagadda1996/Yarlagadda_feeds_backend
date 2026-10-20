@@ -1,24 +1,6 @@
 from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
-from app.core.security import hash_password
-from app.models import ExpenseCategory, User
-
-
-def ensure_admin_user(db: Session) -> None:
-    settings = get_settings()
-    existing = db.query(User).filter(User.username == settings.admin_username).first()
-    if existing:
-        return
-    admin = User(
-        username=settings.admin_username,
-        full_name=settings.admin_full_name,
-        password_hash=hash_password(settings.admin_password),
-        role="admin",
-        is_active=True,
-    )
-    db.add(admin)
-    db.commit()
+from app.models import ExpenseCategory
 
 
 def ensure_expense_categories(db: Session) -> None:
@@ -39,5 +21,4 @@ def ensure_expense_categories(db: Session) -> None:
 
 
 def bootstrap_db(db: Session) -> None:
-    ensure_admin_user(db)
     ensure_expense_categories(db)

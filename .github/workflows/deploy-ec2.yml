@@ -48,11 +48,9 @@ jobs:
             .venv/bin/pip install -r requirements.txt
             mkdir -p data
             if [[ ! -f .env ]]; then
-              JWT=$(openssl rand -hex 32)
               printf '%s\n' \
                 'ENVIRONMENT=production' \
                 'DATABASE_URL=sqlite:////opt/yarlagadda-feeds/data/yarlagadda_feeds.db' \
-                "JWT_SECRET_KEY=$JWT" \
                 'CORS_ORIGINS=*' > .env
             fi
             sudo cp deploy/yarlagadda-feeds.service /etc/systemd/system/yarlagadda-feeds.service

@@ -25,27 +25,13 @@ def _uuid() -> uuid.UUID:
     return uuid.uuid4()
 
 
-class User(Base):
-    __tablename__ = "users"
-
-    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=_uuid)
-    username: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
-    full_name: Mapped[str] = mapped_column(String(128), nullable=False)
-    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
-    role: Mapped[str] = mapped_column(String(32), nullable=False, default="admin")
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
-
 
 class MaterialType(Base):
     __tablename__ = "material_types"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
-    unit: Mapped[str] = mapped_column(String(32), nullable=False, default="kg")
+    unit: Mapped[str] = mapped_column(String(32), nullable=False, default="tonne")
     description: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -78,7 +64,6 @@ class MaterialPurchase(Base):
     payment_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unpaid")
     invoice_ref: Mapped[str | None] = mapped_column(String(64))
     notes: Mapped[str | None] = mapped_column(Text)
-    created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -99,7 +84,6 @@ class MaterialPayment(Base):
     payment_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="cash")
     reference_no: Mapped[str | None] = mapped_column(String(64))
     notes: Mapped[str | None] = mapped_column(Text)
-    created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     purchase: Mapped["MaterialPurchase"] = relationship(back_populates="payments")
@@ -129,7 +113,6 @@ class InventoryTransaction(Base):
     reference_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True))
     notes: Mapped[str | None] = mapped_column(Text)
     txn_date: Mapped[date] = mapped_column(Date, nullable=False)
-    created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -157,7 +140,6 @@ class LabourAdvance(Base):
     advance_type: Mapped[str] = mapped_column(String(32), nullable=False, default="weekly")
     salary_month: Mapped[date] = mapped_column(Date, nullable=False)
     notes: Mapped[str | None] = mapped_column(Text)
-    created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -174,7 +156,6 @@ class LabourSalaryPayment(Base):
     payment_date: Mapped[date] = mapped_column(Date, nullable=False)
     payment_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="cash")
     notes: Mapped[str | None] = mapped_column(Text)
-    created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -219,7 +200,6 @@ class CatchEvent(Base):
     catch_end_date: Mapped[date | None] = mapped_column(Date)
     cycle_months: Mapped[int | None] = mapped_column(SmallInteger)
     notes: Mapped[str | None] = mapped_column(Text)
-    created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     vehicle_sales: Mapped[list["CatchVehicleSale"]] = relationship(back_populates="catch_event")
@@ -237,7 +217,6 @@ class CatchVehicleSale(Base):
     sale_date: Mapped[date] = mapped_column(Date, nullable=False)
     driver_name: Mapped[str | None] = mapped_column(String(128))
     notes: Mapped[str | None] = mapped_column(Text)
-    created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     catch_event: Mapped["CatchEvent"] = relationship(back_populates="vehicle_sales")
@@ -268,7 +247,6 @@ class FeedBatch(Base):
     batch_date: Mapped[date] = mapped_column(Date, nullable=False)
     total_qty_kg: Mapped[Decimal] = mapped_column(Numeric(14, 3), nullable=False, default=0)
     notes: Mapped[str | None] = mapped_column(Text)
-    created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -317,7 +295,6 @@ class Expense(Base):
     description: Mapped[str | None] = mapped_column(Text)
     source_module: Mapped[str | None] = mapped_column(String(64))
     source_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True))
-    created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -330,7 +307,6 @@ class Income(Base):
     description: Mapped[str | None] = mapped_column(Text)
     source_module: Mapped[str | None] = mapped_column(String(64))
     source_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(as_uuid=True))
-    created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -342,5 +318,4 @@ class Investment(Base):
     amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     investor_name: Mapped[str | None] = mapped_column(String(128))
     description: Mapped[str | None] = mapped_column(Text)
-    created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

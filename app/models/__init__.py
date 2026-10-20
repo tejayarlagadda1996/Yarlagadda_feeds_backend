@@ -21,11 +21,9 @@ from app.models.entities import (
     MaterialPurchase,
     MaterialType,
     Supplier,
-    User,
 )
 
 __all__ = [
-    "User",
     "MaterialType",
     "Supplier",
     "MaterialPurchase",
