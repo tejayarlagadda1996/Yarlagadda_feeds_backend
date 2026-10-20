@@ -130,6 +130,120 @@ def create_supplier(body: SupplierIn, db: Session = Depends(get_db)):
     return row
 
 
+@router.get("/vendors")
+def list_vendor_balances(db: Session = Depends(get_db)):
+    """Vendors with purchase/payment totals and balance due."""
+    suppliers = db.query(Supplier).filter(Supplier.is_active.is_(True)).order_by(Supplier.name).all()
+    out = []
+    for s in suppliers:
+        purchases = db.query(MaterialPurchase).filter(MaterialPurchase.supplier_id == s.id).all()
+        if not purchases:
+            continue
+        total_buy = sum((p.total_amount for p in purchases), Decimal("0"))
+        total_paid = sum((p.paid_amount for p in purchases), Decimal("0"))
+        balance = sum((p.balance_amount for p in purchases), Decimal("0"))
+        out.append(
+            {
+                "id": str(s.id),
+                "name": s.name,
+                "phone": s.phone,
+                "total_buy": float(total_buy),
+                "total_paid": float(total_paid),
+                "balance_due": float(balance),
+                "open_bills": sum(1 for p in purchases if p.balance_amount > 0),
+            }
+        )
+    out.sort(key=lambda x: (-x["balance_due"], x["name"]))
+    return out
+
+
+@router.get("/vendors/{supplier_id}/ledger")
+def vendor_ledger(supplier_id: UUID, db: Session = Depends(get_db)):
+    """Chronological buy + pay history for one vendor."""
+    supplier = db.get(Supplier, supplier_id)
+    if not supplier:
+        raise HTTPException(404, "Vendor not found")
+
+    purchases = (
+        db.query(MaterialPurchase)
+        .filter(MaterialPurchase.supplier_id == supplier_id)
+        .order_by(MaterialPurchase.purchase_date.desc(), MaterialPurchase.created_at.desc())
+        .all()
+    )
+    events: list[dict] = []
+    for p in purchases:
+        material = db.get(MaterialType, p.material_type_id)
+        events.append(
+            {
+                "id": str(p.id),
+                "type": "buy",
+                "date": p.purchase_date.isoformat(),
+                "amount": float(p.total_amount),
+                "title": material.name if material else "Material",
+                "subtitle": f"{float(p.quantity)} tonne · Lorry {p.invoice_ref or '-'}",
+                "status": p.payment_status,
+                "balance_amount": float(p.balance_amount),
+                "paid_amount": float(p.paid_amount),
+                "unit_price": float(p.unit_price),
+                "quantity": float(p.quantity),
+                "lorry": p.invoice_ref,
+                "notes": p.notes,
+                "purchase_id": str(p.id),
+                "material_name": material.name if material else None,
+            }
+        )
+        payments = (
+            db.query(MaterialPayment)
+            .filter(MaterialPayment.purchase_id == p.id)
+            .order_by(MaterialPayment.payment_date.desc(), MaterialPayment.created_at.desc())
+            .all()
+        )
+        for pay in payments:
+            events.append(
+                {
+                    "id": str(pay.id),
+                    "type": "pay",
+                    "date": pay.payment_date.isoformat(),
+                    "amount": float(pay.amount),
+                    "title": "Payment",
+                    "subtitle": f"For {material.name if material else 'material'} · {pay.payment_mode}",
+                    "status": "paid",
+                    "payment_mode": pay.payment_mode,
+                    "reference_no": pay.reference_no,
+                    "notes": pay.notes,
+                    "purchase_id": str(p.id),
+                    "material_name": material.name if material else None,
+                    "lorry": p.invoice_ref,
+                    "purchase_total": float(p.total_amount),
+                    "purchase_balance": float(p.balance_amount),
+                }
+            )
+
+    events.sort(key=lambda e: e["date"], reverse=True)
+    total_buy = sum((p.total_amount for p in purchases), Decimal("0"))
+    total_paid = sum((p.paid_amount for p in purchases), Decimal("0"))
+    balance = sum((p.balance_amount for p in purchases), Decimal("0"))
+    return {
+        "vendor": {"id": str(supplier.id), "name": supplier.name, "phone": supplier.phone},
+        "total_buy": float(total_buy),
+        "total_paid": float(total_paid),
+        "balance_due": float(balance),
+        "transactions": events,
+        "open_purchases": [
+            {
+                "id": str(p.id),
+                "material_name": (db.get(MaterialType, p.material_type_id).name if db.get(MaterialType, p.material_type_id) else "Material"),
+                "lorry": p.invoice_ref,
+                "date": p.purchase_date.isoformat(),
+                "total_amount": float(p.total_amount),
+                "balance_amount": float(p.balance_amount),
+            }
+            for p in purchases
+            if p.balance_amount > 0
+        ],
+    }
+
+
 @router.get("/purchases", response_model=list[PurchaseOut])
 def list_purchases(db: Session = Depends(get_db)):
     rows = db.query(MaterialPurchase).order_by(MaterialPurchase.purchase_date.desc()).limit(200).all()

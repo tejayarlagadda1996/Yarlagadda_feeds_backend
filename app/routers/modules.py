@@ -14,8 +14,8 @@ FACTORY_MODULES: list[ModuleInfo] = [
     ),
     ModuleInfo(
         id="payments",
-        title="Pay Shop",
-        description="Pay for materials",
+        title="Pay Vendor",
+        description="Vendor dues & pay",
         status="ready",
         icon="payments",
     ),
