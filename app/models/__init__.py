@@ -13,6 +13,7 @@ from app.models.entities import (
     Income,
     InterestLoan,
     InterestParty,
+    InterestPartyReturn,
     InterestPayment,
     InventoryTransaction,
     Investment,
@@ -51,5 +52,6 @@ __all__ = [
     "Investment",
     "InterestParty",
     "InterestLoan",
+    "InterestPartyReturn",
     "InterestPayment",
 ]

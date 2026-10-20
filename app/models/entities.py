@@ -367,6 +367,8 @@ class InterestLoan(Base):
 
 
 class InterestPayment(Base):
+    """Legacy per-loan payment (kept for old rows). Prefer party-level returns."""
+
     __tablename__ = "interest_payments"
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=_uuid)
@@ -377,3 +379,20 @@ class InterestPayment(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     loan: Mapped["InterestLoan"] = relationship(back_populates="payments")
+
+
+class InterestPartyReturn(Base):
+    """Return / repayment against a Taken or Given party (independent line with its own interest)."""
+
+    __tablename__ = "interest_party_returns"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=_uuid)
+    party_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("interest_parties.id"), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    rate_percent_per_month: Mapped[Decimal] = mapped_column(Numeric(8, 4), nullable=False)
+    return_date: Mapped[date] = mapped_column(Date, nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text)
+    # open | closed (closed after finalize)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="open")
+    closed_date: Mapped[date | None] = mapped_column(Date)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
