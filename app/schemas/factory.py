@@ -1,8 +1,13 @@
 from datetime import date
 from decimal import Decimal
+from typing import Annotated
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PlainSerializer
+
+# JSON numbers (not strings) for Flutter
+Money = Annotated[Decimal, PlainSerializer(lambda v: float(v), return_type=float, when_used='json')]
+
 
 
 # ---- Materials / suppliers / purchases / payments ----
@@ -49,11 +54,11 @@ class PurchaseOut(BaseModel):
     supplier_id: UUID
     material_type_id: UUID
     purchase_date: date
-    quantity: Decimal
-    unit_price: Decimal
-    total_amount: Decimal
-    paid_amount: Decimal
-    balance_amount: Decimal
+    quantity: Money
+    unit_price: Money
+    total_amount: Money
+    paid_amount: Money
+    balance_amount: Money
     payment_status: str
     invoice_ref: str | None
     notes: str | None
@@ -76,7 +81,7 @@ class PaymentOut(BaseModel):
     id: UUID
     purchase_id: UUID
     payment_date: date
-    amount: Decimal
+    amount: Money
     payment_mode: str
     reference_no: str | None
     notes: str | None
@@ -114,7 +119,7 @@ class AdvanceOut(BaseModel):
     id: UUID
     labourer_id: UUID
     advance_date: date
-    amount: Decimal
+    amount: Money
     advance_type: str
     salary_month: date
     notes: str | None
@@ -135,9 +140,9 @@ class SalaryOut(BaseModel):
     id: UUID
     labourer_id: UUID
     salary_month: date
-    gross_wage: Decimal
-    advances_deducted: Decimal
-    net_paid: Decimal
+    gross_wage: Money
+    advances_deducted: Money
+    net_paid: Money
     payment_date: date
     payment_mode: str
     notes: str | None
@@ -200,7 +205,7 @@ class CatchEventOut(BaseModel):
     cycle_months: int | None
     notes: str | None
     tank_name: str | None = None
-    total_amount: Decimal = Decimal("0")
+    total_amount: Money = Decimal("0")
 
     model_config = {"from_attributes": True}
 
@@ -231,7 +236,7 @@ class VehicleSaleOut(BaseModel):
     driver_name: str | None
     notes: str | None
     buyer_name: str | None = None
-    total_amount: Decimal = Decimal("0")
+    total_amount: Money = Decimal("0")
 
     model_config = {"from_attributes": True}
 
@@ -247,7 +252,7 @@ class FeedBatchIn(BaseModel):
 class FeedBatchOut(BaseModel):
     id: UUID
     batch_date: date
-    total_qty_kg: Decimal
+    total_qty_kg: Money
     notes: str | None
 
     model_config = {"from_attributes": True}
@@ -264,7 +269,7 @@ class ExpenseIn(BaseModel):
 class ExpenseOut(BaseModel):
     id: UUID
     expense_date: date
-    amount: Decimal
+    amount: Money
     description: str | None
     category_id: UUID | None
     category_name: str | None = None
@@ -281,7 +286,7 @@ class IncomeIn(BaseModel):
 class IncomeOut(BaseModel):
     id: UUID
     income_date: date
-    amount: Decimal
+    amount: Money
     description: str | None
 
     model_config = {"from_attributes": True}
@@ -297,7 +302,7 @@ class InvestmentIn(BaseModel):
 class InvestmentOut(BaseModel):
     id: UUID
     investment_date: date
-    amount: Decimal
+    amount: Money
     investor_name: str | None
     description: str | None
 
@@ -314,10 +319,10 @@ class CategoryOut(BaseModel):
 class MonthReportOut(BaseModel):
     year: int
     month: int
-    total_expenses: Decimal
-    total_income: Decimal
-    total_investments: Decimal
-    material_payments: Decimal
-    labour_paid: Decimal
-    catch_sales: Decimal
-    net: Decimal
+    total_expenses: Money
+    total_income: Money
+    total_investments: Money
+    material_payments: Money
+    labour_paid: Money
+    catch_sales: Money
+    net: Money
